@@ -93,10 +93,12 @@ public class WebTileLoader : ITileLoader
 
 
 // Mission Classes
+[Serializable]
 public class Waypoint
 {
     public double latitude;
     public double longitude;
+    public Waypoint() { }
     public Waypoint(double lat, double lon)
     {
         latitude = lat;
@@ -104,38 +106,83 @@ public class Waypoint
     }
 }
 
+[Serializable]
 public class MissionConfig
 {
-    public enum SearchType { None, Spiral, Lawnmower, }
+    public enum SearchType { None, Spiral, Lawnmower }
     public enum SearchObject { Aruco, Hammer, Mallet, Bottle }
+
+    [Serializable]
     public class SearchConfig
     {
+        public SearchConfig() { }
         // Spiral: center gps + radius (meters) + lane spacing (meters)
         // Lawnmower: 4 gps corners for lawnmower + lane spacing (meters)
     }
 
-    public List<Waypoint> waypoints;
+    public List<Waypoint> waypoints = new List<Waypoint>();
     public SearchType searchType;
     public SearchObject searchObject;
-    public SearchConfig searchConfig;
+    public SearchConfig searchConfig = new SearchConfig();
 
-    public MissionConfig(SearchType type, SearchObject obj, SearchConfig config, List<Waypoint> points)
+    public MissionConfig(SearchType type, SearchObject obj, List<Waypoint> points)
     {
         searchType = type;
         searchObject = obj;
-        searchConfig = config;
         waypoints = points;
     }
 }
 
 
+
+
+// Mission Visualization
+
+public class WaypointHoverEffect : MonoBehaviour
+{
+    private Color _baseColor;
+    private Material _mat;
+
+    void Start()
+    {
+        _mat = GetComponent<Renderer>().material;
+        // Enable emission keyword for standard shaders
+        _mat.EnableKeyword("_EMISSION");
+    }
+
+    void OnMouseEnter()
+    {
+        _baseColor = _mat.color;
+        // Make it glow by multiplying the color or setting an emission map
+        _mat.SetColor("_EmissionColor", _baseColor * 2.0f); 
+        transform.localScale *= 1.2f; // Slight pop effect
+    }
+
+    void OnMouseExit()
+    {
+        _mat.SetColor("_EmissionColor", Color.black); // Turn off glow
+        transform.localScale /= 1.2f;
+    }
+}
+
 // ---------------------------------------------------------
 // 2. MAIN MAP CONTROLLER
 // ---------------------------------------------------------
 
+[RequireComponent(typeof(LineRenderer))]
 public class SatelliteMapSystem : MonoBehaviour
 {
     public static SatelliteMapSystem Instance; // Singleton for coroutine hosting
+
+    public enum LoadMode { Local, Web }
+
+    [ContextMenu("Export Mission to Console")]
+    public void PrintMissionToConsole()
+    {
+        if (currentMission == null) return;
+        string json = JsonUtility.ToJson(currentMission, true);
+        Debug.Log($"<color=lime><b>[MISSION EXPORT]</b></color>\n{json}");
+    }
 
     [Header("Configuration")]
     public LoadMode mode = LoadMode.Local;
@@ -158,12 +205,16 @@ public class SatelliteMapSystem : MonoBehaviour
     public float tileSize = 256.0f; // Size of the tile in Unity Units
     public Material baseMaterial;  // Material to apply texture to
     public GameObject markerPrefab;
+    [Range(0.1f, 5.0f)]
+    public float markerScale = 2.0f;
+    private float _previousMarkerScale = 2.0f;
+    public Color waypointColor = Color.white;
 
     [Header("Camera Control")]
     public float panSpeed = 1.0f;
     public float zoomSensitivity = 10.0f;
     public float minCamHeight = 5.0f;
-    public float maxCamHeight = 200.0f;
+    public float maxCamHeight = 500.0f;
 
     // Internal State
     private ITileLoader _loader;
@@ -172,12 +223,29 @@ public class SatelliteMapSystem : MonoBehaviour
     private double _originGlobalTileX;
     private double _originGlobalTileY;
 
-    public enum LoadMode { Local, Web }
+    private MissionConfig currentMission;
+
+    private GameObject _markers;
+    private LineRenderer _pathRenderer;
+    private List<GameObject> _waypointMarkers = new List<GameObject>();
+    private int _lastWaypointCount = 0;
 
     private void Awake()
     {
         Instance = this;
         _cam = Camera.main;
+        _pathRenderer = GetComponent<LineRenderer>();
+        _pathRenderer.material = new Material(Shader.Find("Sprites/Default"));
+        _pathRenderer.startColor = Color.white;
+        _pathRenderer.endColor = Color.white;
+        _pathRenderer.startWidth = markerScale * 0.5f;
+        _pathRenderer.endWidth = markerScale * 0.5f;
+        _pathRenderer.alignment = LineAlignment.View;
+        _pathRenderer.numCornerVertices = 5;         
+        _pathRenderer.numCapVertices = 5;
+        _pathRenderer.positionCount = 0;
+        _pathRenderer.useWorldSpace = true;
+        baseMaterial = new Material(Shader.Find("Unlit/Texture"));
 
         // 1. Initialize Loader
         if (mode == LoadMode.Local)
@@ -189,12 +257,21 @@ public class SatelliteMapSystem : MonoBehaviour
         // This makes the click-to-GPS math ultra-fast later.
         _originGlobalTileX = LongitudeToTileX(originLon, zoomLevel);
         _originGlobalTileY = LatitudeToTileY(originLat, zoomLevel);
+
+        currentMission = new MissionConfig(
+            MissionConfig.SearchType.None,
+            MissionConfig.SearchObject.Aruco,
+            new List<Waypoint>()
+        );
     }
 
     private void Start()
     {
         GenerateMap();
-        
+
+        _markers = new GameObject("Markers");
+        _markers.transform.parent = this.transform;
+
         // Center Camera
         if (_cam != null)
         {
@@ -206,7 +283,14 @@ public class SatelliteMapSystem : MonoBehaviour
     private void Update()
     {
         HandleCameraInput();
-        HandleClickForGPS();
+        HandleInteraction();
+
+        if (markerScale != _previousMarkerScale || currentMission.waypoints.Count != _lastWaypointCount)
+        {
+            RenderWaypoints();
+            _pathRenderer.startWidth = markerScale * 0.5f;
+            _pathRenderer.endWidth = markerScale * 0.5f;
+        }
     }
 
     // --- MAP GENERATION ---
@@ -247,7 +331,7 @@ public class SatelliteMapSystem : MonoBehaviour
 
         // Apply Texture
         Renderer r = tile.GetComponent<Renderer>();
-        r.material = baseMaterial != null ? new Material(baseMaterial) : new Material(Shader.Find("Unlit/Texture"));
+        r.material = baseMaterial != null ? baseMaterial : new Material(Shader.Find("Unlit/Texture"));
         r.material.mainTexture = tex;
         
         // Remove collider if you want raycasts to pass through (optional)
@@ -279,9 +363,49 @@ public class SatelliteMapSystem : MonoBehaviour
         return marker;
     }
 
+    void RenderWaypoints()
+    {
+        // Clean up markers if we deleted points
+        while (_waypointMarkers.Count > currentMission.waypoints.Count)
+        {
+            int lastIndex = _waypointMarkers.Count - 1;
+            Destroy(_waypointMarkers[lastIndex]);
+            _waypointMarkers.RemoveAt(lastIndex);
+        }
 
-    // --- INTERACTION & GPS ---
-    void HandleClickForGPS()
+        _pathRenderer.positionCount = currentMission.waypoints.Count;
+
+        for (int i = 0; i < currentMission.waypoints.Count; i++)
+        {
+            Vector3 worldPos = GetUnityPositionFromGPS(currentMission.waypoints[i].latitude, currentMission.waypoints[i].longitude);
+            worldPos.y = 1.0f; 
+            
+            _pathRenderer.SetPosition(i, worldPos);
+
+            if (i >= _waypointMarkers.Count)
+            {
+                GameObject marker = markerPrefab != null ? Instantiate(markerPrefab) : GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                marker.transform.SetParent(_markers.transform);
+                marker.AddComponent<WaypointHoverEffect>();
+                _waypointMarkers.Add(marker);
+            }
+            
+            _waypointMarkers[i].name = $"WP_{i}";
+            _waypointMarkers[i].transform.position = worldPos;
+            _waypointMarkers[i].transform.localScale = Vector3.one * markerScale;
+
+            Renderer r = _waypointMarkers[i].GetComponent<Renderer>();
+            if (i == 0) r.material.color = Color.green;
+            else if (i == currentMission.waypoints.Count - 1) r.material.color = Color.red;
+            else r.material.color = waypointColor;
+        }
+
+        _previousMarkerScale = markerScale;
+        _lastWaypointCount = currentMission.waypoints.Count;
+    }
+
+    // --- INTERACTION  ---
+    void HandleInteraction()
     {
         if (Input.GetMouseButtonDown(0))
         {
@@ -292,9 +416,27 @@ public class SatelliteMapSystem : MonoBehaviour
             {
                 Vector3 hitPoint = ray.GetPoint(enter);
                 GetGPSFromUnityPosition(hitPoint, out double lat, out double lon);
+                currentMission.waypoints.Add(new Waypoint(lat, lon));
                 Debug.Log($"<color=cyan>CLICK:</color> Unity({hitPoint}) => GPS({lat:F7}, {lon:F7})");
+            }
+        }
 
-                SpawnMarkerAtGPS(lat, lon, $"Marker_{lat:F4}_{lon:F4}");
+        if (Input.GetMouseButtonDown(1))
+        {
+            Ray ray = _cam.ScreenPointToRay(Input.mousePosition);
+            RaycastHit hit;
+
+            // Ensure your markerPrefab has a Collider!
+            if (Physics.Raycast(ray, out hit))
+            {
+                GameObject hitObj = hit.collider.gameObject;
+                int markerIndex = _waypointMarkers.IndexOf(hitObj);
+
+                if (markerIndex != -1)
+                {
+                    currentMission.waypoints.RemoveAt(markerIndex);
+                    Debug.Log($"Removed Waypoint {markerIndex}");
+                }
             }
         }
     }
@@ -302,9 +444,9 @@ public class SatelliteMapSystem : MonoBehaviour
     void HandleCameraInput()
     {
         // Panning (Right Mouse Drag)
-        if (Input.GetMouseButtonDown(1)) _lastMousePos = Input.mousePosition;
+        if (Input.GetMouseButtonDown(2)) _lastMousePos = Input.mousePosition;
         
-        if (Input.GetMouseButton(1))
+        if (Input.GetMouseButton(2))
         {
             Vector3 delta = Input.mousePosition - _lastMousePos;
             
@@ -353,6 +495,25 @@ public class SatelliteMapSystem : MonoBehaviour
         // 3. Convert back to Lat/Lon
         lon = TileXToLongitude(targetGlobalX, zoomLevel);
         lat = TileYToLatitude(targetGlobalY, zoomLevel);
+    }
+
+    public Vector3 GetUnityPositionFromGPS(double lat, double lon)
+    {
+        // 1. Convert Global GPS to Global Web Mercator tile coordinates
+        double targetGlobalX = LongitudeToTileX(lon, zoomLevel);
+        double targetGlobalY = LatitudeToTileY(lat, zoomLevel);
+
+        // 2. Subtract the origin to get the offset in tiles
+        double offsetX = targetGlobalX - _originGlobalTileX;
+        double offsetY = targetGlobalY - _originGlobalTileY;
+
+        // 3. Scale by tileSize to get Unity Units
+        // Unity X+ is East (same as tile X)
+        // Unity Z+ is North (opposite of tile Y which increases South)
+        float x = (float)(offsetX * tileSize);
+        float z = (float)(-offsetY * tileSize);
+
+        return new Vector3(x, 0, z);
     }
 
     // Standard Web Mercator Formulas
