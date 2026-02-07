@@ -304,6 +304,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 222775725}
+  - component: {fileID: 222775728}
   - component: {fileID: 222775726}
   - component: {fileID: 222775727}
   m_Layer: 0
@@ -353,7 +354,7 @@ MonoBehaviour:
   tileSize: 10
   baseMaterial: {fileID: 0}
   markerPrefab: {fileID: 2559506763726250585, guid: 5bd78900f3e5e384084ab7d2aa17b300, type: 3}
-  markerScale: 2
+  markerScale: 1
   waypointColor: {r: 0.24705882, g: 0.6745098, b: 0.9529412, a: 1}
   panSpeed: 1
   zoomSensitivity: 10
@@ -463,6 +464,21 @@ LineRenderer:
   m_UseWorldSpace: 1
   m_Loop: 0
   m_ApplyActiveColorSpace: 1
+--- !u!114 &222775728
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 222775723}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d81a63bdc73c23c4c951170b9bc8ec27, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  rosHost: 127.0.0.1
+  rosPort: 65432
+  mapSystem: {fileID: 222775726}
 --- !u!1 &528308538
 GameObject:
   m_ObjectHideFlags: 0

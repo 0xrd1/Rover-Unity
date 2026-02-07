@@ -3,6 +3,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine.Networking;
+using Newtonsoft.Json;
 
 // ---------------------------------------------------------
 // 1. LOADER INTERFACES & CLASSES
@@ -109,7 +110,7 @@ public class Waypoint
 [Serializable]
 public class MissionConfig
 {
-    public enum SearchType { None, Spiral, Lawnmower }
+    public enum SearchPattern { None, Spiral, Lawnmower }
     public enum SearchObject { Aruco, Hammer, Mallet, Bottle }
 
     [Serializable]
@@ -121,19 +122,28 @@ public class MissionConfig
     }
 
     public List<Waypoint> waypoints = new List<Waypoint>();
-    public SearchType searchType;
+    public SearchPattern searchPattern;
     public SearchObject searchObject;
     public SearchConfig searchConfig = new SearchConfig();
 
-    public MissionConfig(SearchType type, SearchObject obj, List<Waypoint> points)
+    public MissionConfig(SearchPattern pattern, SearchObject obj, List<Waypoint> points)
     {
-        searchType = type;
+        searchPattern = pattern;
         searchObject = obj;
         waypoints = points;
     }
+
+    // Serialize MissionConfig to JSON for ROS2
+    public string ToJson()
+    {
+        var data = new {
+            search_object = (int)searchObject,
+            search_pattern = (int)searchPattern,
+            nav_waypoints = waypoints.ConvertAll(wp => new { latitude = wp.latitude, longitude = wp.longitude })
+        };
+        return JsonConvert.SerializeObject(data, Formatting.Indented);
+    }
 }
-
-
 
 
 // Mission Visualization
@@ -180,8 +190,16 @@ public class SatelliteMapSystem : MonoBehaviour
     public void PrintMissionToConsole()
     {
         if (currentMission == null) return;
-        string json = JsonUtility.ToJson(currentMission, true);
+        string json = currentMission.ToJson();
         Debug.Log($"<color=lime><b>[MISSION EXPORT]</b></color>\n{json}");
+    }
+
+    public string GetMissionJson()
+    {
+        if (currentMission == null) return null;
+        string json = currentMission.ToJson();
+        Debug.Log($"<color=lime><b>[MISSION EXPORT]</b></color>\n{json}");
+        return json;
     }
 
     [Header("Configuration")]
@@ -201,20 +219,40 @@ public class SatelliteMapSystem : MonoBehaviour
     public double originLat = 44.56469;
     public double originLon = -123.27415;
     
-    [Header("Unity Settings")]
+    [Header("Visual Settings")]
     public float tileSize = 256.0f; // Size of the tile in Unity Units
     public Material baseMaterial;  // Material to apply texture to
     public GameObject markerPrefab;
-    [Range(0.1f, 5.0f)]
-    public float markerScale = 2.0f;
-    private float _previousMarkerScale = 2.0f;
+    [Range(0.1f, 5.0f), SerializeField]
+    private float markerScale = 1.0f;
+    public float MarkerScale
+    {
+        get => markerScale;
+        set
+        {
+            if (markerScale != value)
+            {
+                markerScale = value;
+                UpdateVisualScale();
+            }
+        }
+    }
+    private float _previousMarkerScale = 1.0f;
     public Color waypointColor = Color.white;
+
+    private GameObject _markers;
+    private LineRenderer _pathRenderer;
+    private List<GameObject> _waypointMarkers = new List<GameObject>();
+    private int _lastWaypointCount = 0;
+    private GameObject _draggedMarker = null;
+    private int _draggedIndex = -1;
 
     [Header("Camera Control")]
     public float panSpeed = 1.0f;
     public float zoomSensitivity = 10.0f;
     public float minCamHeight = 5.0f;
     public float maxCamHeight = 500.0f;
+    private float _lastCamHeight;
 
     // Internal State
     private ITileLoader _loader;
@@ -225,15 +263,15 @@ public class SatelliteMapSystem : MonoBehaviour
 
     private MissionConfig currentMission;
 
-    private GameObject _markers;
-    private LineRenderer _pathRenderer;
-    private List<GameObject> _waypointMarkers = new List<GameObject>();
-    private int _lastWaypointCount = 0;
+
+
 
     private void Awake()
     {
         Instance = this;
         _cam = Camera.main;
+        _lastCamHeight = _cam.transform.position.y;
+
         _pathRenderer = GetComponent<LineRenderer>();
         _pathRenderer.material = new Material(Shader.Find("Sprites/Default"));
         _pathRenderer.startColor = Color.white;
@@ -241,7 +279,7 @@ public class SatelliteMapSystem : MonoBehaviour
         _pathRenderer.startWidth = markerScale * 0.5f;
         _pathRenderer.endWidth = markerScale * 0.5f;
         _pathRenderer.alignment = LineAlignment.View;
-        _pathRenderer.numCornerVertices = 5;         
+        _pathRenderer.numCornerVertices = 10;         
         _pathRenderer.numCapVertices = 5;
         _pathRenderer.positionCount = 0;
         _pathRenderer.useWorldSpace = true;
@@ -259,7 +297,7 @@ public class SatelliteMapSystem : MonoBehaviour
         _originGlobalTileY = LatitudeToTileY(originLat, zoomLevel);
 
         currentMission = new MissionConfig(
-            MissionConfig.SearchType.None,
+            MissionConfig.SearchPattern.None,
             MissionConfig.SearchObject.Aruco,
             new List<Waypoint>()
         );
@@ -271,6 +309,7 @@ public class SatelliteMapSystem : MonoBehaviour
 
         _markers = new GameObject("Markers");
         _markers.transform.parent = this.transform;
+        _markers.transform.localPosition = new Vector3(0, 1, 0);
 
         // Center Camera
         if (_cam != null)
@@ -285,13 +324,48 @@ public class SatelliteMapSystem : MonoBehaviour
         HandleCameraInput();
         HandleInteraction();
 
-        if (markerScale != _previousMarkerScale || currentMission.waypoints.Count != _lastWaypointCount)
+        if (currentMission.waypoints.Count != _lastWaypointCount)
         {
             RenderWaypoints();
-            _pathRenderer.startWidth = markerScale * 0.5f;
-            _pathRenderer.endWidth = markerScale * 0.5f;
         }
     }
+
+    private void LateUpdate()
+    {
+        if (!Mathf.Approximately(_cam.transform.position.y, _lastCamHeight))
+        {
+            UpdateVisualScale();
+            _lastCamHeight = _cam.transform.position.y;
+        }
+    }
+
+    private float GetCurrentZoomScale()
+    {
+        // return markerScale * Mathf.Sqrt(_cam.transform.position.y) * 0.5f;
+        float t = Mathf.InverseLerp(minCamHeight, maxCamHeight, _cam.transform.position.y);
+        float baseScale = Mathf.Lerp(0.2f, 4.0f, t);
+        return baseScale * markerScale;
+    }
+
+    private void UpdateVisualScale()
+    {
+        float finalScale = GetCurrentZoomScale();
+        Vector3 scaleVec = Vector3.one * finalScale;
+
+        foreach (var marker in _waypointMarkers)
+        {
+            if (marker != null) marker.transform.localScale = scaleVec;
+        }
+
+        if (_pathRenderer != null)
+        {
+            _pathRenderer.startWidth = finalScale * 0.6f;
+            _pathRenderer.endWidth = finalScale * 0.6f;
+        }
+
+        _previousMarkerScale = markerScale;
+    }
+
 
     // --- MAP GENERATION ---
 
@@ -378,7 +452,7 @@ public class SatelliteMapSystem : MonoBehaviour
         for (int i = 0; i < currentMission.waypoints.Count; i++)
         {
             Vector3 worldPos = GetUnityPositionFromGPS(currentMission.waypoints[i].latitude, currentMission.waypoints[i].longitude);
-            worldPos.y = 1.0f; 
+            worldPos.y = 0.1f; 
             
             _pathRenderer.SetPosition(i, worldPos);
 
@@ -392,53 +466,136 @@ public class SatelliteMapSystem : MonoBehaviour
             
             _waypointMarkers[i].name = $"WP_{i}";
             _waypointMarkers[i].transform.position = worldPos;
-            _waypointMarkers[i].transform.localScale = Vector3.one * markerScale;
+            _waypointMarkers[i].transform.localScale = Vector3.one * GetCurrentZoomScale();
 
             Renderer r = _waypointMarkers[i].GetComponent<Renderer>();
+            r.material.SetColor("_EmissionColor", Color.black);
             if (i == 0) r.material.color = Color.green;
             else if (i == currentMission.waypoints.Count - 1) r.material.color = Color.red;
             else r.material.color = waypointColor;
         }
 
-        _previousMarkerScale = markerScale;
         _lastWaypointCount = currentMission.waypoints.Count;
     }
 
     // --- INTERACTION  ---
     void HandleInteraction()
     {
+        Ray ray = _cam.ScreenPointToRay(Input.mousePosition);
+        Plane groundPlane = new Plane(Vector3.up, Vector3.zero); // Infinite ground plane at Y=0
+
+        // --- START DRAG OR ADD (Left Click) ---
         if (Input.GetMouseButtonDown(0))
         {
-            Ray ray = _cam.ScreenPointToRay(Input.mousePosition);
-            Plane groundPlane = new Plane(Vector3.up, Vector3.zero); // Infinite ground plane at Y=0
+            if (Physics.Raycast(ray, out RaycastHit hit))
+            {
+                int index = _waypointMarkers.IndexOf(hit.collider.gameObject);
+                if (index != -1)
+                {
+                    _draggedMarker = hit.collider.gameObject;
+                    _draggedIndex = index;
+                    return; // Exit early so we don't place a new waypoint under the one we just grabbed
+                }
+            }
+
 
             if (groundPlane.Raycast(ray, out float enter))
             {
                 Vector3 hitPoint = ray.GetPoint(enter);
+                int insertIndex = GetIndexOnLineSegment(hitPoint);
                 GetGPSFromUnityPosition(hitPoint, out double lat, out double lon);
-                currentMission.waypoints.Add(new Waypoint(lat, lon));
-                Debug.Log($"<color=cyan>CLICK:</color> Unity({hitPoint}) => GPS({lat:F7}, {lon:F7})");
+                if (insertIndex != -1)
+                {
+                    currentMission.waypoints.Insert(insertIndex, new Waypoint(lat, lon));
+                    Debug.Log($"<color=cyan>INSERT:</color> Unity({hitPoint}) => GPS({lat:F7}, {lon:F7})");
+                }
+                else 
+                {
+                    currentMission.waypoints.Add(new Waypoint(lat, lon));
+                    Debug.Log($"<color=cyan>CLICK:</color> Unity({hitPoint}) => GPS({lat:F7}, {lon:F7})");
+                }
+                RenderWaypoints();
+                return;
             }
         }
 
+        // --- PROCESSING DRAG ---
+        if (Input.GetMouseButton(0) && _draggedMarker != null)
+        {
+            if (groundPlane.Raycast(ray, out float enter))
+            {
+                Vector3 newWorldPos = ray.GetPoint(enter);
+                
+                _draggedMarker.transform.position = new Vector3(newWorldPos.x, 0.1f, newWorldPos.z);
+                _pathRenderer.SetPosition(_draggedIndex, _draggedMarker.transform.position);
+                
+                GetGPSFromUnityPosition(newWorldPos, out double newLat, out double newLon);
+                currentMission.waypoints[_draggedIndex].latitude = newLat;
+                currentMission.waypoints[_draggedIndex].longitude = newLon;
+            }
+        }
+
+        // --- DROP ---
+        if (Input.GetMouseButtonUp(0))
+        {
+            _draggedMarker = null;
+            _draggedIndex = -1;
+        }
+
+        // --- REMOVE (Right Click) ---
         if (Input.GetMouseButtonDown(1))
         {
-            Ray ray = _cam.ScreenPointToRay(Input.mousePosition);
-            RaycastHit hit;
-
-            // Ensure your markerPrefab has a Collider!
-            if (Physics.Raycast(ray, out hit))
+            if (Physics.Raycast(ray, out RaycastHit hit))
             {
-                GameObject hitObj = hit.collider.gameObject;
-                int markerIndex = _waypointMarkers.IndexOf(hitObj);
-
-                if (markerIndex != -1)
+                int index = _waypointMarkers.IndexOf(hit.collider.gameObject);
+                if (index != -1)
                 {
-                    currentMission.waypoints.RemoveAt(markerIndex);
-                    Debug.Log($"Removed Waypoint {markerIndex}");
+                    currentMission.waypoints.RemoveAt(index);
+                    Debug.Log($"Removed Waypoint {index}");
                 }
             }
         }
+    }
+
+    private int GetIndexOnLineSegment(Vector3 clickPoint)
+    {
+        // We need at least two points to have a segment
+        if (currentMission.waypoints.Count < 2) return -1;
+
+        // Scale the threshold by zoom so it's always easy to click
+        float effectiveThreshold = 2.0f * (GetCurrentZoomScale() * 0.5f);
+
+        for (int i = 0; i < currentMission.waypoints.Count - 1; i++)
+        {
+            Vector3 p1 = _waypointMarkers[i].transform.position;
+            Vector3 p2 = _waypointMarkers[i+1].transform.position;
+
+            // Calculate distance from clickPoint to the segment p1-p2
+            float distance = DistanceToSegment(clickPoint, p1, p2);
+
+            if (distance < effectiveThreshold)
+            {
+                return i + 1; // Insert at the index of the second point in the segment
+            }
+        }
+
+        return -1;
+    }
+
+    // Math helper: Find the shortest distance from point p to segment a-b
+    private float DistanceToSegment(Vector3 p, Vector3 a, Vector3 b)
+    {
+        Vector3 ab = b - a;
+        Vector3 ap = p - a;
+        
+        // Project point p onto line ab, normalized by length squared
+        float t = Vector3.Dot(ap, ab) / Vector3.Dot(ab, ab);
+        
+        // Clamp t to ensure the projection stays within the segment bounds
+        t = Mathf.Clamp01(t);
+        
+        Vector3 closestPoint = a + t * ab;
+        return Vector3.Distance(p, closestPoint);
     }
 
     void HandleCameraInput()
@@ -538,4 +695,12 @@ public class SatelliteMapSystem : MonoBehaviour
         double tileYNorm = Math.PI - 2.0 * Math.PI * tileY / Math.Pow(2.0, zoom);
         return 180.0 / Math.PI * Math.Atan(0.5 * (Math.Exp(tileYNorm) - Math.Exp(-tileYNorm)));
     }
+
+
+    void OnValidate()
+    {
+        // This ensures the markers update immediately when you slide the slider in the Editor
+        if (Application.isPlaying && _cam != null) UpdateVisualScale();
+    }
 }
+
