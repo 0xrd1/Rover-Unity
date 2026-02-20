@@ -26,14 +26,16 @@ public class MissionSender : MonoBehaviour
             Debug.LogError("MissionSender: No mission to send.");
             return;
         }
-        // Debug.Log($"Sending Mission JSON: {missionJson}");
         try
         {
+            Debug.Log($"Connecting to ROS node at {rosHost}:{rosPort}");
             using (TcpClient client = new TcpClient(rosHost, rosPort))
             {
+                Debug.Log($"Connected to ROS node at {rosHost}:{rosPort}");
                 client.SendTimeout = 5000;
                 using (NetworkStream stream = client.GetStream())
                 {
+                    Debug.Log($"Sending mission JSON: {missionJson}");
                     byte[] data = Encoding.UTF8.GetBytes(missionJson + "\n");
                     stream.Write(data, 0, data.Length);
                     stream.Flush();
@@ -43,7 +45,7 @@ public class MissionSender : MonoBehaviour
         }
         catch (SocketException ex)
         {
-            Debug.LogError($"MissionSender: Socket error: {ex.Message}");
+            Debug.LogError($"MissionSender: Socket error: {ex}");
         }
     }
 }

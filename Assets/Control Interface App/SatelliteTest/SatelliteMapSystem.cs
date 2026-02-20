@@ -5,9 +5,8 @@ using System.Collections.Generic;
 using UnityEngine.Networking;
 using Newtonsoft.Json;
 
-// ---------------------------------------------------------
-// 1. LOADER INTERFACES & CLASSES
-// ---------------------------------------------------------
+// ------------------------------
+// TILE LOADER INTERFACES & CLASSES
 
 public interface ITileLoader
 {
@@ -29,7 +28,6 @@ public class LocalTileLoader : ITileLoader
     public void LoadTile(int x, int y, int zoom, Action<Texture2D> onLoaded)
     {
 #if UNITY_EDITOR
-        // Matches your requested format: Assets/Folder/~x,y~.png
         string path = $"Assets/{_baseFolder}/~{x},{y}~.png";
         Texture2D tex = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>(path);
         
@@ -47,7 +45,7 @@ public class LocalTileLoader : ITileLoader
     }
 }
 
-// Loads from a Web API (e.g., OpenStreetMap, Mapbox, or custom server)
+// Load from a Web API (e.g., OpenStreetMap, Mapbox, or custom server)
 public class WebTileLoader : ITileLoader
 {
     private string _urlTemplate; // e.g. "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -93,7 +91,9 @@ public class WebTileLoader : ITileLoader
 }
 
 
-// Mission Classes
+// ------------------------------
+// MISSION CONFIGURATION CLASSES
+
 [Serializable]
 public class Waypoint
 {
@@ -110,6 +110,7 @@ public class Waypoint
 [Serializable]
 public class MissionConfig
 {
+    // Match search patterns and objects to ROS2 enums.
     public enum SearchPattern { None, Spiral, Lawnmower }
     public enum SearchObject { Aruco, Hammer, Mallet, Bottle }
 
@@ -133,7 +134,6 @@ public class MissionConfig
         waypoints = points;
     }
 
-    // Serialize MissionConfig to JSON for ROS2
     public string ToJson()
     {
         var data = new {
@@ -145,8 +145,8 @@ public class MissionConfig
     }
 }
 
-
-// Mission Visualization
+// ---------------------------------
+// MISSION VISUALIZATION COMPONENTS
 
 public class WaypointHoverEffect : MonoBehaviour
 {
@@ -175,14 +175,13 @@ public class WaypointHoverEffect : MonoBehaviour
     }
 }
 
-// ---------------------------------------------------------
-// 2. MAIN MAP CONTROLLER
-// ---------------------------------------------------------
+// -------------------------
+// MAIN MAP CONTROLLER
 
 [RequireComponent(typeof(LineRenderer))]
 public class SatelliteMapSystem : MonoBehaviour
 {
-    public static SatelliteMapSystem Instance; // Singleton for coroutine hosting
+    public static SatelliteMapSystem Instance;
 
     public enum LoadMode { Local, Web }
 
@@ -221,7 +220,7 @@ public class SatelliteMapSystem : MonoBehaviour
     
     [Header("Visual Settings")]
     public float tileSize = 256.0f; // Size of the tile in Unity Units
-    public Material baseMaterial;  // Material to apply texture to
+    public Material baseMaterial;
     public GameObject markerPrefab;
     [Range(0.1f, 5.0f), SerializeField]
     private float markerScale = 1.0f;
@@ -264,8 +263,6 @@ public class SatelliteMapSystem : MonoBehaviour
     private MissionConfig currentMission;
 
 
-
-
     private void Awake()
     {
         Instance = this;
@@ -285,13 +282,13 @@ public class SatelliteMapSystem : MonoBehaviour
         _pathRenderer.useWorldSpace = true;
         baseMaterial = new Material(Shader.Find("Unlit/Texture"));
 
-        // 1. Initialize Loader
+        // Initialize Loader
         if (mode == LoadMode.Local)
             _loader = new LocalTileLoader(localTileFolder);
         else
             _loader = new WebTileLoader(webUrlTemplate);
 
-        // 2. Pre-calculate Global Web Mercator Coordinates for the Origin (Lat/Lon)
+        // Pre-calculate Global Web Mercator Coordinates for the Origin (Lat/Lon)
         // This makes the click-to-GPS math ultra-fast later.
         _originGlobalTileX = LongitudeToTileX(originLon, zoomLevel);
         _originGlobalTileY = LatitudeToTileY(originLat, zoomLevel);
@@ -362,8 +359,7 @@ public class SatelliteMapSystem : MonoBehaviour
             _pathRenderer.startWidth = finalScale * 0.6f;
             _pathRenderer.endWidth = finalScale * 0.6f;
         }
-
-        _previousMarkerScale = markerScale;
+_previousMarkerScale = markerScale;
     }
 
 
@@ -387,6 +383,7 @@ public class SatelliteMapSystem : MonoBehaviour
         }
     }
 
+    
     void CreateTileObject(int x, int y, Texture2D tex, Transform parent)
     {
         GameObject tile = GameObject.CreatePrimitive(PrimitiveType.Quad);
@@ -394,8 +391,8 @@ public class SatelliteMapSystem : MonoBehaviour
         tile.transform.parent = parent;
 
         // Position on X/Z Plane (Ground)
-        // Note: Map Y (North/South) corresponds to Unity Z. 
-        // In Tile grids, Positive Y is usually South (down). In Unity, Positive Z is North.
+        // Map Y (North/South) corresponds to Unity Z. 
+        // In Tile grids, Positive Y is South (down). In Unity, Positive Z is North.
         // We map Tile Y to Unity -Z.
         tile.transform.localPosition = new Vector3(x * tileSize, 0, -y * tileSize);
         
@@ -408,24 +405,22 @@ public class SatelliteMapSystem : MonoBehaviour
         r.material = baseMaterial != null ? baseMaterial : new Material(Shader.Find("Unlit/Texture"));
         r.material.mainTexture = tex;
         
-        // Remove collider if you want raycasts to pass through (optional)
-        // keeping it helps for clicking specific tiles, but for GPS we raycast against a math plane
         Destroy(tile.GetComponent<Collider>());
     }
+
 
     // Mission Visualization
     public GameObject SpawnMarkerAtGPS(double lat, double lon, string markerName = "GPS_Marker")
     {
-        // 1. Convert GPS to Global Tile Coords
+        // Convert GPS to Global Tile Coords
         double targetGlobalX = LongitudeToTileX(lon, zoomLevel);
         double targetGlobalY = LatitudeToTileY(lat, zoomLevel);
 
-        // 2. Find difference from origin
+        // Find difference from origin
         double offsetX = targetGlobalX - _originGlobalTileX;
         double offsetY = targetGlobalY - _originGlobalTileY;
 
-        // 3. Convert to Unity Units (X is East, Z is North)
-        // Note: Global Y increases South, so we invert it for Unity's Z
+        // Convert to Unity Units (X is East, Z is North)
         float unityX = (float)(offsetX * tileSize);
         float unityZ = (float)(-offsetY * tileSize);
 
@@ -436,6 +431,7 @@ public class SatelliteMapSystem : MonoBehaviour
         
         return marker;
     }
+
 
     void RenderWaypoints()
     {
@@ -478,13 +474,13 @@ public class SatelliteMapSystem : MonoBehaviour
         _lastWaypointCount = currentMission.waypoints.Count;
     }
 
-    // --- INTERACTION  ---
+
     void HandleInteraction()
     {
         Ray ray = _cam.ScreenPointToRay(Input.mousePosition);
         Plane groundPlane = new Plane(Vector3.up, Vector3.zero); // Infinite ground plane at Y=0
 
-        // --- START DRAG OR ADD (Left Click) ---
+        // --- START DRAG OR ADD POINT (Left Click) ---
         if (Input.GetMouseButtonDown(0))
         {
             if (Physics.Raycast(ray, out RaycastHit hit))
@@ -498,7 +494,7 @@ public class SatelliteMapSystem : MonoBehaviour
                 }
             }
 
-
+            // Add new point (insert if clicked near a path segment)
             if (groundPlane.Raycast(ray, out float enter))
             {
                 Vector3 hitPoint = ray.GetPoint(enter);
@@ -525,7 +521,6 @@ public class SatelliteMapSystem : MonoBehaviour
             if (groundPlane.Raycast(ray, out float enter))
             {
                 Vector3 newWorldPos = ray.GetPoint(enter);
-                
                 _draggedMarker.transform.position = new Vector3(newWorldPos.x, 0.1f, newWorldPos.z);
                 _pathRenderer.SetPosition(_draggedIndex, _draggedMarker.transform.position);
                 
@@ -542,7 +537,7 @@ public class SatelliteMapSystem : MonoBehaviour
             _draggedIndex = -1;
         }
 
-        // --- REMOVE (Right Click) ---
+        // --- REMOVE POINT (Right Click) ---
         if (Input.GetMouseButtonDown(1))
         {
             if (Physics.Raycast(ray, out RaycastHit hit))
@@ -557,9 +552,47 @@ public class SatelliteMapSystem : MonoBehaviour
         }
     }
 
+
+    void HandleCameraInput()
+    {
+        // Panning (Right Mouse Drag)
+        if (Input.GetMouseButtonDown(2)) _lastMousePos = Input.mousePosition;
+        
+        if (Input.GetMouseButton(2))
+        {
+            Vector3 delta = Input.mousePosition - _lastMousePos;
+            
+            // Adjust pan speed based on height (pan faster when higher up)
+            float heightMult = _cam.transform.position.y / 10.0f;
+            Vector3 move = new Vector3(-delta.x, 0, -delta.y) * panSpeed * heightMult * Time.deltaTime;
+            
+            // Transform movement relative to camera rotation
+            move = Quaternion.Euler(0, _cam.transform.eulerAngles.y, 0) * move;
+            
+            _cam.transform.Translate(move, Space.World);
+            _lastMousePos = Input.mousePosition;
+        }
+
+        // Zooming (Scroll Wheel)
+        float scroll = Input.mouseScrollDelta.y;
+        if (scroll != 0)
+        {
+            Vector3 zoomDir = _cam.transform.forward * scroll * zoomSensitivity;
+            Vector3 newPos = _cam.transform.position + zoomDir;
+
+            // Clamp Height
+            if (newPos.y < minCamHeight) newPos = _cam.transform.position + (Vector3.down * (_cam.transform.position.y - minCamHeight));
+            if (newPos.y > maxCamHeight) newPos.y = maxCamHeight; // Simple cap
+
+            _cam.transform.position = newPos;
+        }
+    }
+
+    // ------------------------
+    // MATH UTILITIES
+
     private int GetIndexOnLineSegment(Vector3 clickPoint)
     {
-        // We need at least two points to have a segment
         if (currentMission.waypoints.Count < 2) return -1;
 
         // Scale the threshold by zoom so it's always easy to click
@@ -598,78 +631,37 @@ public class SatelliteMapSystem : MonoBehaviour
         return Vector3.Distance(p, closestPoint);
     }
 
-    void HandleCameraInput()
-    {
-        // Panning (Right Mouse Drag)
-        if (Input.GetMouseButtonDown(2)) _lastMousePos = Input.mousePosition;
-        
-        if (Input.GetMouseButton(2))
-        {
-            Vector3 delta = Input.mousePosition - _lastMousePos;
-            
-            // Adjust pan speed based on height (pan faster when higher up)
-            float heightMult = _cam.transform.position.y / 10.0f;
-            Vector3 move = new Vector3(-delta.x, 0, -delta.y) * panSpeed * heightMult * Time.deltaTime;
-            
-            // Transform movement relative to camera rotation
-            move = Quaternion.Euler(0, _cam.transform.eulerAngles.y, 0) * move;
-            
-            _cam.transform.Translate(move, Space.World);
-            _lastMousePos = Input.mousePosition;
-        }
-
-        // Zooming (Scroll Wheel)
-        float scroll = Input.mouseScrollDelta.y;
-        if (scroll != 0)
-        {
-            Vector3 zoomDir = _cam.transform.forward * scroll * zoomSensitivity;
-            Vector3 newPos = _cam.transform.position + zoomDir;
-
-            // Clamp Height
-            if (newPos.y < minCamHeight) newPos = _cam.transform.position + (Vector3.down * (_cam.transform.position.y - minCamHeight));
-            if (newPos.y > maxCamHeight) newPos.y = maxCamHeight; // Simple cap
-
-            _cam.transform.position = newPos;
-        }
-    }
-
-    // --- MATH CORE (Web Mercator) ---
-
     public void GetGPSFromUnityPosition(Vector3 pos, out double lat, out double lon)
     {
-        // 1. Normalize Unity units to Tile units
+        // Normalize Unity units to Tile units
         double xOffsetTiles = pos.x / tileSize;
         double yOffsetTiles = pos.z / tileSize; // Unity Z is Map Y (North/South)
 
-        // 2. Apply to Origin Global Coordinate
+        // Apply to Origin Global Coordinate
         // Tile X increases East (Unity +X)
         double targetGlobalX = _originGlobalTileX + xOffsetTiles;
         
         // Tile Y increases SOUTH. Unity Z increases NORTH.
-        // So we SUBTRACT the Unity Z offset.
         double targetGlobalY = _originGlobalTileY - yOffsetTiles;
 
-        // 3. Convert back to Lat/Lon
+        // Convert back to Lat/Lon
         lon = TileXToLongitude(targetGlobalX, zoomLevel);
         lat = TileYToLatitude(targetGlobalY, zoomLevel);
     }
 
     public Vector3 GetUnityPositionFromGPS(double lat, double lon)
     {
-        // 1. Convert Global GPS to Global Web Mercator tile coordinates
+        // Convert Global GPS to Global Web Mercator tile coordinates
         double targetGlobalX = LongitudeToTileX(lon, zoomLevel);
         double targetGlobalY = LatitudeToTileY(lat, zoomLevel);
 
-        // 2. Subtract the origin to get the offset in tiles
+        // Subtract the origin to get the offset in tiles
         double offsetX = targetGlobalX - _originGlobalTileX;
         double offsetY = targetGlobalY - _originGlobalTileY;
 
-        // 3. Scale by tileSize to get Unity Units
-        // Unity X+ is East (same as tile X)
-        // Unity Z+ is North (opposite of tile Y which increases South)
+        // Scale by tileSize to get Unity Units
         float x = (float)(offsetX * tileSize);
         float z = (float)(-offsetY * tileSize);
-
         return new Vector3(x, 0, z);
     }
 

@@ -5,13 +5,14 @@ import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from nav_autonomy_interface.action import Mission
+from nav_autonomy_interface.msg import GPSWaypoint
 
 class ROSBridge(Node):
     def __init__(self, rover_action_server='mission', rover_host=None):
         super().__init__('ros_bridge')
         self.action_client = ActionClient(self, Mission, rover_action_server)
         self.tcp_port = 5005
-        self.tcp_host = '0.0.0.0'
+        self.tcp_host = '127.0.0.1'
         self.rover_host = rover_host
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.bind((self.tcp_host, self.tcp_port))
@@ -20,6 +21,7 @@ class ROSBridge(Node):
 
 
     def run(self):
+        self.get_logger().info("ROSBridge is running. Waiting for missions...")
         while rclpy.ok():
             conn, addr = self.sock.accept()
             with conn:
@@ -48,14 +50,14 @@ class ROSBridge(Node):
         goal_msg.search_pattern = mission.get('search_pattern', 0)
         goal_msg.nav_waypoints = []
         for wp in waypoints:
-            waypoint = Mission.Goal.NavWaypoints()
+            waypoint = GPSWaypoint()
             waypoint.latitude = wp.get('latitude', 0.0)
             waypoint.longitude = wp.get('longitude', 0.0)
             goal_msg.nav_waypoints.append(waypoint)
         self.get_logger().info(f"Sending mission goal to rover...")
         self.action_client.wait_for_server()
         future = self.action_client.send_goal_async(goal_msg)
-        rclpy.spin_until_future_complete(self, future)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
         result = future.result()
         self.get_logger().info(f"Mission goal sent. Result: {result}")
 
