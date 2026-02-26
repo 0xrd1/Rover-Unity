@@ -215,8 +215,8 @@ public class SatelliteMapSystem : MonoBehaviour
     
     [Header("Geospatial Settings")]
     public int zoomLevel = 19;
-    public double originLat = 44.56469;
-    public double originLon = -123.27415;
+    public double originLat = 44.56479;
+    public double originLon = -123.27378;
     
     [Header("Visual Settings")]
     public float tileSize = 256.0f; // Size of the tile in Unity Units
