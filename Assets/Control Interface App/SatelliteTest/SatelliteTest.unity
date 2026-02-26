@@ -170,6 +170,7 @@ MonoBehaviour:
   m_DeselectOnBackgroundClick: 1
   m_PointerBehavior: 0
   m_CursorLockBehavior: 0
+  m_ScrollDeltaPerTick: 6
 --- !u!114 &38965323
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -348,8 +349,8 @@ MonoBehaviour:
   minY: -18
   maxY: 17
   zoomLevel: 19
-  originLat: 44.56469
-  originLon: -123.27415
+  originLat: 44.564791
+  originLon: -123.273809
   tileSize: 10
   baseMaterial: {fileID: 0}
   markerPrefab: {fileID: 2559506763726250585, guid: 5bd78900f3e5e384084ab7d2aa17b300, type: 3}
